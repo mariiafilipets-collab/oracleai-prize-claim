@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OracleAI — Claim Your Season Prize</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: system-ui, -apple-system, sans-serif; background: #0a0e1a; color: #e8ecf4; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
+  .card { background: #12172a; border: 1px solid #232a45; border-radius: 16px; padding: 32px; max-width: 480px; width: 100%; }
+  h1 { font-size: 22px; margin-bottom: 8px; }
+  .sub { color: #8b93ad; font-size: 14px; margin-bottom: 24px; }
+  button { width: 100%; padding: 14px; border-radius: 10px; border: none; font-size: 16px; font-weight: 600; cursor: pointer; transition: opacity .15s; }
+  button:disabled { opacity: .5; cursor: default; }
+  .btn-connect { background: #4f7cff; color: #fff; }
+  .btn-claim { background: #22c55e; color: #04140a; margin-top: 16px; }
+  .prize { background: #0d1322; border: 1px solid #1e2640; border-radius: 10px; padding: 16px; margin-top: 16px; }
+  .prize .amount { font-size: 24px; font-weight: 700; color: #22c55e; }
+  .prize .meta { font-size: 13px; color: #8b93ad; margin-top: 4px; }
+  .status { margin-top: 16px; font-size: 14px; padding: 12px; border-radius: 8px; display: none; }
+  .status.ok { display: block; background: #052e16; color: #4ade80; border: 1px solid #166534; }
+  .status.err { display: block; background: #2e0a0a; color: #f87171; border: 1px solid #7f1d1d; }
+  .status.info { display: block; background: #0c1a33; color: #60a5fa; border: 1px solid #1e3a5f; }
+  a { color: #4f7cff; word-break: break-all; }
+  .addr { font-family: monospace; font-size: 13px; color: #8b93ad; margin-top: 16px; word-break: break-all; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>🏆 OracleAI Prize Claim</h1>
+  <p class="sub">Season prize distribution (Seasons 1–9). Connect the wallet that won to claim your BNB.</p>
+
+  <button id="connectBtn" class="btn-connect">Connect Wallet</button>
+  <div id="addr" class="addr"></div>
+
+  <div id="prizeList"></div>
+
+  <div id="status" class="status"></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/ethers@6.13.4/dist/ethers.umd.min.js"></script>
+<script>
+const CONTRACT = "0xABf45860CfaE1c95B3A32a5853c1A2bAAAE2089A";
+const CHAIN_ID = 56;
+const ABI = [
+  "function claim(uint256 epoch, uint256 index, address account, uint256 amount, bytes32[] proof) external",
+  "function isClaimed(uint256 epoch, uint256 index) view returns (bool)"
+];
+
+let prizes = [];
+let provider, signer, userAddr;
+
+const $ = id => document.getElementById(id);
+const status = (msg, cls) => { const s = $("status"); s.textContent = msg; s.className = "status " + cls; };
+
+async function loadPrizes() {
+  const r = await fetch("prizes.json");
+  const data = await r.json();
+  prizes = data.prizes;
+}
+
+async function connect() {
+  if (!window.ethereum) { status("No wallet found. Install MetaMask or Trust Wallet.", "err"); return; }
+  provider = new ethers.BrowserProvider(window.ethereum);
+  const net = await provider.getNetwork();
+  if (Number(net.chainId) !== CHAIN_ID) {
+    try {
+      await window.ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: "0x38" }] });
+    } catch (e) {
+      if (e.code === 4902) {
+        await window.ethereum.request({ method: "wallet_addEthereumChain", params: [{
+          chainId: "0x38", chainName: "BNB Smart Chain",
+          rpcUrls: ["https://bsc-dataseed.binance.org/"],
+          nativeCurrency: { name: "BNB", symbol: "BNB", decimals: 18 },
+          blockExplorerUrls: ["https://bscscan.com"]
+        }]});
+      } else { status("Please switch to BNB Smart Chain", "err"); return; }
+    }
+    provider = new ethers.BrowserProvider(window.ethereum);
+  }
+  signer = await provider.getSigner();
+  userAddr = (await signer.getAddress()).toLowerCase();
+  $("addr").textContent = userAddr;
+  $("connectBtn").textContent = "Connected ✓";
+  $("connectBtn").disabled = true;
+  showPrizes();
+}
+
+function showPrizes() {
+  const mine = prizes.filter(p => p.address.toLowerCase() === userAddr);
+  const list = $("prizeList");
+  list.innerHTML = "";
+  if (mine.length === 0) {
+    status("This wallet has no unclaimed prizes. Connect the wallet that played.", "info");
+    return;
+  }
+  const total = mine.reduce((s, p) => s + parseFloat(p.amountBnb), 0);
+  status(`You have ${mine.length} unclaimed prize(s) — ${total.toFixed(6)} BNB total`, "ok");
+  for (const p of mine) {
+    const div = document.createElement("div");
+    div.className = "prize";
+    div.innerHTML = `<div class="amount">${parseFloat(p.amountBnb).toFixed(6)} BNB</div>
+      <div class="meta">Epoch ${p.epoch} · Rank #${p.rank}</div>
+      <button class="btn-claim" data-e="${p.epoch}" data-i="${p.index}" data-a="${p.amountWei}">Claim</button>`;
+    list.appendChild(div);
+  }
+  list.querySelectorAll(".btn-claim").forEach(b => b.onclick = () => claim(b));
+}
+
+async function claim(btn) {
+  const epoch = BigInt(btn.dataset.e), index = BigInt(btn.dataset.i), amount = BigInt(btn.dataset.a);
+  const p = prizes.find(x => x.epoch == epoch && x.index == index);
+  btn.disabled = true; btn.textContent = "Claiming…";
+  try {
+    const c = new ethers.Contract(CONTRACT, ABI, signer);
+    const already = await c.isClaimed(epoch, index);
+    if (already) { btn.textContent = "Already claimed"; status("This prize was already claimed.", "info"); return; }
+    const tx = await c.claim(epoch, index, userAddr, amount, p.proof);
+    status(`TX sent: ${tx.hash} — waiting…`, "info");
+    const rc = await tx.wait();
+    btn.textContent = "Claimed ✓";
+    status(`Claimed! TX: https://bscscan.com/tx/${rc.hash}`, "ok");
+  } catch (e) {
+    btn.disabled = false; btn.textContent = "Claim";
+    status("Claim failed: " + (e.shortMessage || e.message || e), "err");
+  }
+}
+
+$("connectBtn").onclick = connect;
+loadPrizes().catch(e => status("Failed to load prize data: " + e.message, "err"));
+</script>
+</body>
+</html>
